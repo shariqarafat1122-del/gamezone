@@ -1,149 +1,192 @@
-import { motion, AnimatePresence } from 'framer-motion';
-import { Bell, CheckCheck, Trophy, Wallet, Megaphone, Shield, Zap, XCircle, AlertTriangle } from 'lucide-react';
-import { MainLayout } from '../layouts/MainLayout';
-import { Button } from '../components/ui/Button';
-import { useNotifications } from '../context/NotificationContext';
-import { Notification, NotificationType } from '../types';
-import { format } from 'date-fns';
+// src/pages/NotificationsPage.tsx
+import React, { useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Bell, CheckCheck } from 'lucide-react'
+import { useNotifications } from '../context/NotificationContext'
+import type { Notification, NotificationType } from '../types'
+import { formatDate, cn } from '../lib/utils'
 
-const getNotifIcon = (type: NotificationType) => {
-  const icons: Partial<Record<NotificationType, React.ReactNode>> = {
-    deposit_approved: <Wallet size={18} className="text-green-400" />,
-    deposit_rejected: <XCircle size={18} className="text-red-400" />,
-    withdrawal_approved: <Wallet size={18} className="text-blue-400" />,
-    withdrawal_rejected: <XCircle size={18} className="text-red-400" />,
-    win_credited: <Trophy size={18} className="text-yellow-400" />,
-    match_started: <Zap size={18} className="text-green-400" />,
-    match_completed: <Zap size={18} className="text-blue-400" />,
-    admin_announcement: <Megaphone size={18} className="text-purple-400" />,
-    maintenance: <AlertTriangle size={18} className="text-orange-400" />,
-    bonus_credited: <Trophy size={18} className="text-purple-400" />,
-  };
-  return icons[type] || <Bell size={18} className="text-gray-400" />;
-};
+// ✅ Fixed: All NotificationType values included
+const NOTIF_ICONS: Record<NotificationType, string> = {
+  deposit_approved: '✅',
+  deposit_rejected: '❌',
+  withdrawal_approved: '💸',
+  withdrawal_rejected: '🚫',
+  match_started: '🎮',
+  match_completed: '🏁',
+  win_credited: '🏆',
+  admin_announcement: '📢',
+  bonus_credited: '🎁',
+  maintenance: '🔧',   // ✅ Fixed: added maintenance
+  system: '🔔',
+}
 
-const getNotifBg = (type: NotificationType) => {
-  const bgMap: Partial<Record<NotificationType, string>> = {
-    deposit_approved: 'bg-green-500/10 border-green-500/20',
-    deposit_rejected: 'bg-red-500/10 border-red-500/20',
-    withdrawal_approved: 'bg-blue-500/10 border-blue-500/20',
-    withdrawal_rejected: 'bg-red-500/10 border-red-500/20',
-    win_credited: 'bg-yellow-500/10 border-yellow-500/20',
-    match_started: 'bg-green-500/10 border-green-500/20',
-    admin_announcement: 'bg-purple-500/10 border-purple-500/20',
-    maintenance: 'bg-orange-500/10 border-orange-500/20',
-  };
-  return bgMap[type] || 'bg-white/5 border-white/10';
-};
+// ✅ Fixed: All NotificationType values included
+const NOTIF_COLORS: Record<NotificationType, string> = {
+  deposit_approved: '#10B981',
+  deposit_rejected: '#EF4444',
+  withdrawal_approved: '#10B981',
+  withdrawal_rejected: '#EF4444',
+  match_started: '#3B82F6',
+  match_completed: '#6B7280',
+  win_credited: '#F59E0B',
+  admin_announcement: '#8B5CF6',
+  bonus_credited: '#F59E0B',
+  maintenance: '#F97316',  // ✅ Fixed: added maintenance
+  system: '#3B82F6',
+}
 
-const NotificationItem = ({ notif, onClick }: { notif: Notification; onClick: () => void }) => (
-  <motion.div
-    initial={{ opacity: 0, x: -20 }}
-    animate={{ opacity: 1, x: 0 }}
-    exit={{ opacity: 0, x: 20 }}
-    onClick={onClick}
-    className={`flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all hover:scale-[1.01] ${getNotifBg(notif.type)} ${
-      !notif.isRead ? 'ring-1 ring-yellow-500/20' : ''
-    }`}
-  >
-    <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center flex-shrink-0 mt-0.5">
-      {getNotifIcon(notif.type)}
-    </div>
-    <div className="flex-1 min-w-0">
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-sm font-semibold text-white leading-tight">{notif.title}</p>
-        {!notif.isRead && (
-          <div className="w-2 h-2 rounded-full bg-yellow-400 flex-shrink-0 mt-1.5" />
-        )}
-      </div>
-      <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{notif.message}</p>
-      <p className="text-[10px] text-gray-600 mt-1.5">
-        {notif.createdAt ? format(new Date(notif.createdAt as string), 'MMM d, yyyy h:mm a') : 'Just now'}
-      </p>
-    </div>
-  </motion.div>
-);
+const NotificationsPage: React.FC = () => {
+  const { notifications, unreadCount, markAsRead, markAllAsRead, isLoading } =
+    useNotifications()
+  const [filter, setFilter] = useState<'all' | 'unread'>('all')
 
-export const NotificationsPage = () => {
-  const { notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications();
+  const filtered =
+    filter === 'unread'
+      ? notifications.filter((n) => !n.isRead)
+      : notifications
 
   return (
-    <MainLayout>
-      <div className="px-4 py-6 max-w-2xl mx-auto">
-        {/* Header */}
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="flex items-center justify-between mb-6"
-        >
-          <div>
-            <h1 className="text-2xl font-black text-white">Notifications</h1>
+    <div className="min-h-screen bg-black pb-24">
+      {/* Header */}
+      <div className="sticky top-0 z-40 bg-black/95 backdrop-blur-xl border-b border-white/5 px-4 py-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Bell className="w-5 h-5 text-yellow-400" />
+            <h1 className="text-xl font-black text-white">Notifications</h1>
             {unreadCount > 0 && (
-              <p className="text-sm text-gray-500 mt-0.5">{unreadCount} unread</p>
+              <span className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center text-white text-xs font-black">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
             )}
           </div>
           {unreadCount > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              leftIcon={<CheckCheck size={14} />}
+            <motion.button
+              whileTap={{ scale: 0.95 }}
               onClick={markAllAsRead}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-bold"
             >
-              Mark All Read
-            </Button>
+              <CheckCheck className="w-3.5 h-3.5" />
+              Mark all read
+            </motion.button>
           )}
-        </motion.div>
+        </div>
 
-        {/* Notifications List */}
-        {notifications.length === 0 ? (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="flex flex-col items-center justify-center py-20 text-center"
-          >
-            <div className="w-20 h-20 rounded-full bg-white/5 flex items-center justify-center mb-4">
-              <Bell size={32} className="text-gray-600" />
-            </div>
-            <h3 className="text-lg font-bold text-gray-400 mb-2">No Notifications</h3>
-            <p className="text-gray-600 text-sm">Your notifications will appear here</p>
-          </motion.div>
-        ) : (
-          <div className="space-y-3">
-            {/* Unread section */}
-            {unreadCount > 0 && (
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">New</p>
-                <div className="space-y-2">
-                  <AnimatePresence>
-                    {notifications.filter(n => !n.isRead).map((notif) => (
-                      <NotificationItem
-                        key={notif.id}
-                        notif={notif}
-                        onClick={() => markAsRead(notif.id)}
-                      />
-                    ))}
-                  </AnimatePresence>
-                </div>
-              </div>
-            )}
-
-            {/* Read section */}
-            {notifications.filter(n => n.isRead).length > 0 && (
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 mt-4">Earlier</p>
-                <div className="space-y-2 opacity-70">
-                  <AnimatePresence>
-                    {notifications.filter(n => n.isRead).map((notif) => (
-                      <NotificationItem key={notif.id} notif={notif} onClick={() => {}} />
-                    ))}
-                  </AnimatePresence>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-        <div className="h-8" />
+        {/* Filter */}
+        <div className="flex gap-2">
+          {(['all', 'unread'] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={cn(
+                'px-4 py-1.5 rounded-xl text-xs font-bold capitalize transition-all',
+                filter === f
+                  ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
+                  : 'text-white/40 bg-white/5'
+              )}
+            >
+              {f}{' '}
+              {f === 'unread' && unreadCount > 0 ? `(${unreadCount})` : ''}
+            </button>
+          ))}
+        </div>
       </div>
-    </MainLayout>
-  );
-};
+
+      <div className="px-4 pt-4">
+        {isLoading ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="h-20 rounded-2xl bg-white/3 animate-pulse" />
+            ))}
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="text-center py-20">
+            <p className="text-5xl mb-4">🔔</p>
+            <p className="text-white/40 font-bold">
+              {filter === 'unread'
+                ? 'No unread notifications'
+                : 'No notifications yet'}
+            </p>
+            <p className="text-white/20 text-sm mt-1">
+              Play games and make transactions to get notified
+            </p>
+          </div>
+        ) : (
+          <AnimatePresence>
+            <div className="space-y-2">
+              {filtered.map((notif: Notification, i: number) => {
+                const icon = NOTIF_ICONS[notif.type] || '🔔'
+                const color = NOTIF_COLORS[notif.type] || '#6B7280'
+
+                return (
+                  <motion.div
+                    key={notif.notifId} // ✅ Fixed: use notifId
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, x: -100 }}
+                    transition={{ delay: i * 0.04 }}
+                    onClick={() =>
+                      !notif.isRead && markAsRead(notif.notifId) // ✅ Fixed: use notifId
+                    }
+                    className={cn(
+                      'flex gap-3 p-4 rounded-2xl border cursor-pointer transition-all',
+                      !notif.isRead
+                        ? 'border-opacity-30'
+                        : 'border-white/5 bg-white/3'
+                    )}
+                    style={
+                      !notif.isRead
+                        ? {
+                            borderColor: `${color}30`,
+                            background: `${color}08`,
+                          }
+                        : {}
+                    }
+                  >
+                    {/* Icon */}
+                    <div
+                      className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+                      style={{ background: `${color}15` }}
+                    >
+                      {icon}
+                    </div>
+
+                    {/* Content */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <p
+                          className={cn(
+                            'text-sm font-bold',
+                            !notif.isRead ? 'text-white' : 'text-white/70'
+                          )}
+                        >
+                          {notif.title}
+                        </p>
+                        {!notif.isRead && (
+                          <div
+                            className="w-2 h-2 rounded-full flex-shrink-0 mt-1.5"
+                            style={{ background: color }}
+                          />
+                        )}
+                      </div>
+                      <p className="text-xs text-white/40 mt-0.5 leading-relaxed">
+                        {notif.message}
+                      </p>
+                      <p className="text-xs text-white/20 mt-1.5">
+                        {notif.createdAt?.toDate
+                          ? formatDate(notif.createdAt.toDate())
+                          : 'Just now'}
+                      </p>
+                    </div>
+                  </motion.div>
+                )
+              })}
+            </div>
+          </AnimatePresence>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default NotificationsPage
