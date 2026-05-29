@@ -1,4 +1,4 @@
-// src/App.tsx
+
 import React, { Suspense, lazy } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
