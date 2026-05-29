@@ -65,6 +65,7 @@ export interface Transaction {
 export type DepositStatus = 'pending' | 'approved' | 'rejected'
 
 export interface DepositRequest {
+  id: string
   requestId: string
   uid: string
   userName: string
@@ -82,6 +83,7 @@ export interface DepositRequest {
 export type WithdrawalStatus = 'pending' | 'processing' | 'approved' | 'rejected'
 
 export interface WithdrawalRequest {
+  id: string
   requestId: string
   uid: string
   userName: string
@@ -94,6 +96,7 @@ export interface WithdrawalRequest {
   createdAt: any
 }
 
+// ✅ Fixed: Added all notification types including 'maintenance'
 export type NotificationType =
   | 'deposit_approved'
   | 'deposit_rejected'
@@ -104,10 +107,11 @@ export type NotificationType =
   | 'win_credited'
   | 'admin_announcement'
   | 'bonus_credited'
+  | 'maintenance'
   | 'system'
 
 export interface Notification {
-  notifId: string
+  notifId: string   // ✅ Fixed: use notifId not id
   uid: string
   type: NotificationType
   title: string
@@ -115,6 +119,7 @@ export interface Notification {
   isRead: boolean
   data?: Record<string, any>
   createdAt: any
+  readAt?: any
 }
 
 export interface GameStats {
