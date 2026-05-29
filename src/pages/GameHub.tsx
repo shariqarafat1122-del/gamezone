@@ -617,7 +617,7 @@ const GameHub: React.FC = () => {
                     setSearchQuery('')
                     setActiveFilter('all')
                   
-}
+}}
                 className="mt-4 px-4 py-2 rounded-xl bg-white/10 text-white/60 text-sm font-bold"
               >
                 Reset Filters
