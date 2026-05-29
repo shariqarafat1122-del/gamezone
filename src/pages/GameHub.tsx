@@ -617,3 +617,35 @@ const GameHub: React.FC = () => {
                     setSearchQuery('')
                     setActiveFilter('all')
                   
+}
+                className="mt-4 px-4 py-2 rounded-xl bg-white/10 text-white/60 text-sm font-bold"
+              >
+                Reset Filters
+              </button>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="games"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex flex-col gap-4"
+            >
+              {filteredGames.map((game, index) => (
+                <GameCard
+                  key={game.id}
+                  game={game}
+                  index={index}
+                  onPlay={handlePlay}
+                />
+              ))}
+            </motion.div>
+          )}
+          </AnimatePresence>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default GameHub
