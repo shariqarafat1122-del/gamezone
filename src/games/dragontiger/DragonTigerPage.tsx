@@ -236,3 +236,4 @@ export const DragonTigerPage = () => {
     </MainLayout>
   );
 };
+export default DragonTigerPage
