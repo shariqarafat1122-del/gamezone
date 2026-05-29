@@ -1,11 +1,6 @@
-// src/firebase/userService.ts
 import { doc, runTransaction, collection, addDoc, serverTimestamp } from 'firebase/firestore'
-import { db } from './config'  // ← adjust './config' to match your firebase init file
+import { db } from './config'
 
-/**
- * Debits amount from walletBalance and logs a transaction.
- * Throws if balance is insufficient.
- */
 export async function debitWallet(
   uid: string,
   amount: number,
@@ -14,7 +9,6 @@ export async function debitWallet(
   referenceId?: string
 ): Promise<void> {
   const userRef = doc(db, 'users', uid)
-
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(userRef)
     if (!snap.exists()) throw new Error('User not found')
@@ -27,21 +21,14 @@ export async function debitWallet(
       updatedAt: serverTimestamp(),
     })
   })
-
   await addDoc(collection(db, 'transactions'), {
-    uid,
-    type,
-    amount,
-    description,
+    uid, type, amount, description,
     referenceId: referenceId ?? null,
     status: 'completed',
     createdAt: serverTimestamp(),
   })
 }
 
-/**
- * Credits amount to walletBalance and logs a transaction.
- */
 export async function creditWallet(
   uid: string,
   amount: number,
@@ -50,7 +37,6 @@ export async function creditWallet(
   referenceId?: string
 ): Promise<void> {
   const userRef = doc(db, 'users', uid)
-
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(userRef)
     if (!snap.exists()) throw new Error('User not found')
@@ -61,12 +47,8 @@ export async function creditWallet(
       updatedAt: serverTimestamp(),
     })
   })
-
   await addDoc(collection(db, 'transactions'), {
-    uid,
-    type,
-    amount,
-    description,
+    uid, type, amount, description,
     referenceId: referenceId ?? null,
     status: 'completed',
     createdAt: serverTimestamp(),
