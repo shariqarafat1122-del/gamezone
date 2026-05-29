@@ -1,349 +1,851 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { useNavigate, useLocation } from 'react-router-dom';
+// src/firebase/userService.ts
 import {
-  Wallet, Plus, Minus, ArrowUpRight, ArrowDownLeft, Trophy, Zap,
-  Copy, CheckCircle, QrCode, ChevronRight, Clock
-} from 'lucide-react';
-import { MainLayout } from '../layouts/MainLayout';
-import { Button } from '../components/ui/Button';
-import { Input } from '../components/ui/Input';
-import { Badge } from '../components/ui/Badge';
-import { toast } from '../components/ui/Toast';
-import { useAuth } from '../context/AuthContext';
-import {
-  createDepositRequest,
-  createWithdrawalRequest,
-  getUserTransactions,
-  getUserDeposits,
-  getUserWithdrawals
-} from '../firebase/userService';
-import { Transaction, DepositRequest, WithdrawalRequest } from '../types';
-import { format } from 'date-fns';
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
+  collection,
+  query,
+  where,
+  orderBy,
+  limit,
+  onSnapshot,
+  serverTimestamp,
+  runTransaction,
+  writeBatch,
+  increment,
+  startAfter,
+  QueryDocumentSnapshot,
+  DocumentData,
+} from 'firebase/firestore'
+import { db } from './config'
+import type {
+  UserProfile,
+  WalletData,
+  Transaction,
+  Notification,
+  DepositRequest,
+  WithdrawalRequest,
+} from '../types'
 
-type WalletTab = 'overview' | 'deposit' | 'withdraw' | 'history';
+// ============================================================
+// USER SERVICES
+// ============================================================
 
-const UPI_ID = 'gamezone@ybl';
-const QR_AMOUNT_AMOUNTS = [100, 200, 500, 1000];
+export async function getUserProfile(uid: string): Promise<UserProfile | null> {
+  try {
+    const snap = await getDoc(doc(db, 'users', uid))
+    if (snap.exists()) return snap.data() as UserProfile
+    return null
+  } catch {
+    return null
+  }
+}
 
-export const WalletPage = () => {
-  const { userProfile } = useAuth();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const [activeTab, setActiveTab] = useState<WalletTab>(
-    location.pathname.includes('deposit') ? 'deposit' :
-    location.pathname.includes('withdraw') ? 'withdraw' : 'overview'
-  );
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [deposits, setDeposits] = useState<DepositRequest[]>([]);
-  const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
+export async function createUserProfile(
+  uid: string,
+  data: Partial<UserProfile>
+): Promise<void> {
+  const batch = writeBatch(db)
 
-  // Deposit form
-  const [depositAmount, setDepositAmount] = useState('');
-  const [utrNumber, setUtrNumber] = useState('');
+  const profile: UserProfile = {
+    uid,
+    name: data.name || 'Player',
+    username: `player_${uid.slice(0, 6)}`,
+    email: data.email || '',
+    mobile: data.mobile || '',
+    avatar: data.avatar || '',
+    role: 'user',
+    status: 'active',
+    walletBalance: 0,
+    winningBalance: 0,
+    depositBalance: 0,
+    totalDeposit: 0,
+    totalWithdraw: 0,
+    totalBet: 0,
+    totalWin: 0,
+    totalGames: 0,
+    referralCode: `GZ${uid.slice(0, 6).toUpperCase()}`,
+    kycStatus: 'none',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    ...data,
+  }
 
-  // Withdraw form
-  const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [upiId, setUpiId] = useState('');
+  const wallet: WalletData = {
+    uid,
+    balance: 0,
+    winningBalance: 0,
+    depositBalance: 0,
+    bonusBalance: 0,
+    lockedBalance: 0,
+    updatedAt: serverTimestamp(),
+  }
 
-  useEffect(() => {
-    if (!userProfile?.uid) return;
-    getUserTransactions(userProfile.uid, 20).then(setTransactions).catch(() => {});
-    getUserDeposits(userProfile.uid).then(setDeposits).catch(() => {});
-    getUserWithdrawals(userProfile.uid).then(setWithdrawals).catch(() => {});
-  }, [userProfile?.uid]);
+  batch.set(doc(db, 'users', uid), profile)
+  batch.set(doc(db, 'wallets', uid), wallet)
+  await batch.commit()
+}
 
-  const copyUPI = () => {
-    navigator.clipboard.writeText(UPI_ID);
-    setCopied(true);
-    toast.success('UPI ID copied!');
-    setTimeout(() => setCopied(false), 2000);
-  };
+export async function updateUserProfile(
+  uid: string,
+  data: Partial<Pick<UserProfile, 'name' | 'username' | 'avatar' | 'mobile'>>
+): Promise<void> {
+  await updateDoc(doc(db, 'users', uid), {
+    ...data,
+    updatedAt: serverTimestamp(),
+  })
+}
 
-  const handleDeposit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!userProfile || !depositAmount || !utrNumber) { toast.error('Fill all fields'); return; }
-    const amount = parseFloat(depositAmount);
-    if (amount < 100) { toast.error('Minimum deposit ₹100'); return; }
-    setIsLoading(true);
-    try {
-      await createDepositRequest(userProfile.uid, userProfile.name, amount, utrNumber);
-      toast.success('Deposit request submitted!', 'Will be approved within 30 minutes');
-      setDepositAmount('');
-      setUtrNumber('');
-      setActiveTab('overview');
-      getUserDeposits(userProfile.uid).then(setDeposits);
-    } catch (err) {
-      toast.error('Failed to submit', err instanceof Error ? err.message : 'Try again');
-    } finally {
-      setIsLoading(false);
+export function subscribeToUserProfile(
+  uid: string,
+  callback: (profile: UserProfile | null) => void
+): () => void {
+  return onSnapshot(doc(db, 'users', uid), (snap) => {
+    callback(snap.exists() ? (snap.data() as UserProfile) : null)
+  })
+}
+
+// ============================================================
+// WALLET SERVICES
+// ============================================================
+
+export async function getWallet(uid: string): Promise<WalletData | null> {
+  try {
+    const snap = await getDoc(doc(db, 'wallets', uid))
+    return snap.exists() ? (snap.data() as WalletData) : null
+  } catch {
+    return null
+  }
+}
+
+export function subscribeToWallet(
+  uid: string,
+  callback: (wallet: WalletData | null) => void
+): () => void {
+  return onSnapshot(doc(db, 'wallets', uid), (snap) => {
+    callback(snap.exists() ? (snap.data() as WalletData) : null)
+  })
+}
+
+export async function creditWallet(
+  uid: string,
+  amount: number,
+  type: 'deposit' | 'win' | 'refund' | 'bonus',
+  description: string,
+  referenceId?: string
+): Promise<void> {
+  await runTransaction(db, async (transaction) => {
+    const walletRef = doc(db, 'wallets', uid)
+    const walletSnap = await transaction.get(walletRef)
+    if (!walletSnap.exists()) throw new Error('Wallet not found')
+
+    transaction.update(walletRef, {
+      balance: increment(amount),
+      updatedAt: serverTimestamp(),
+    })
+
+    const txRef = doc(collection(db, 'transactions'))
+    transaction.set(txRef, {
+      txId: txRef.id,
+      uid,
+      type,
+      amount,
+      description,
+      referenceId: referenceId || null,
+      status: 'completed',
+      createdAt: serverTimestamp(),
+    })
+
+    const userRef = doc(db, 'users', uid)
+    if (type === 'deposit') {
+      transaction.update(userRef, {
+        totalDeposit: increment(amount),
+        updatedAt: serverTimestamp(),
+      })
+    } else if (type === 'win') {
+      transaction.update(userRef, {
+        totalWin: increment(amount),
+        updatedAt: serverTimestamp(),
+      })
     }
-  };
+  })
+}
 
-  const handleWithdraw = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!userProfile || !withdrawAmount || !upiId) { toast.error('Fill all fields'); return; }
-    const amount = parseFloat(withdrawAmount);
-    if (amount < 100) { toast.error('Minimum withdrawal ₹100'); return; }
-    if (amount > (userProfile.walletBalance || 0)) { toast.error('Insufficient balance'); return; }
-    setIsLoading(true);
-    try {
-      await createWithdrawalRequest(userProfile.uid, userProfile.name, amount, upiId);
-      toast.success('Withdrawal request submitted!', 'Will be processed within 24 hours');
-      setWithdrawAmount('');
-      setUpiId('');
-      setActiveTab('overview');
-    } catch (err) {
-      toast.error('Failed to submit', err instanceof Error ? err.message : 'Try again');
-    } finally {
-      setIsLoading(false);
+export async function deductWallet(
+  uid: string,
+  amount: number,
+  type: 'withdrawal' | 'bet',
+  description: string,
+  referenceId?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    await runTransaction(db, async (transaction) => {
+      const walletRef = doc(db, 'wallets', uid)
+      const walletSnap = await transaction.get(walletRef)
+      if (!walletSnap.exists()) throw new Error('Wallet not found')
+
+      const currentBalance = walletSnap.data().balance || 0
+      if (currentBalance < amount) throw new Error('Insufficient balance')
+
+      transaction.update(walletRef, {
+        balance: increment(-amount),
+        updatedAt: serverTimestamp(),
+      })
+
+      const txRef = doc(collection(db, 'transactions'))
+      transaction.set(txRef, {
+        txId: txRef.id,
+        uid,
+        type,
+        amount,
+        description,
+        referenceId: referenceId || null,
+        status: 'completed',
+        createdAt: serverTimestamp(),
+      })
+
+      const userRef = doc(db, 'users', uid)
+      if (type === 'withdrawal') {
+        transaction.update(userRef, {
+          totalWithdraw: increment(amount),
+          updatedAt: serverTimestamp(),
+        })
+      } else if (type === 'bet') {
+        transaction.update(userRef, {
+          totalBet: increment(amount),
+          updatedAt: serverTimestamp(),
+        })
+      }
+    })
+    return { success: true, message: 'Success' }
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Failed' }
+  }
+}
+
+// ============================================================
+// TRANSACTION SERVICES
+// ============================================================
+
+// ✅ Fixed: Returns Transaction[] directly
+export function subscribeToTransactions(
+  uid: string,
+  limitCount: number,
+  callback: (transactions: Transaction[]) => void
+): () => void {
+  const q = query(
+    collection(db, 'transactions'),
+    where('uid', '==', uid),
+    orderBy('createdAt', 'desc'),
+    limit(limitCount)
+  )
+  return onSnapshot(q, (snap) => {
+    const transactions = snap.docs.map((d) => ({
+      ...d.data(),
+      txId: d.id,
+    } as Transaction))
+    callback(transactions)
+  })
+}
+
+// ✅ Fixed: Returns Transaction[] directly (not paginated object)
+export async function getUserTransactions(
+  uid: string,
+  limitCount = 20
+): Promise<Transaction[]> {
+  try {
+    const q = query(
+      collection(db, 'transactions'),
+      where('uid', '==', uid),
+      orderBy('createdAt', 'desc'),
+      limit(limitCount)
+    )
+    const snap = await getDocs(q)
+    return snap.docs.map((d) => ({
+      ...d.data(),
+      txId: d.id,
+    } as Transaction))
+  } catch {
+    return []
+  }
+}
+
+// ============================================================
+// DEPOSIT SERVICES
+// ============================================================
+
+export async function createDepositRequest(
+  uid: string,
+  userName: string,
+  amount: number,
+  utr: string,
+  upiId?: string
+): Promise<{ success: boolean; requestId?: string; message?: string }> {
+  try {
+    if (amount < 100) return { success: false, message: 'Minimum deposit is ₹100' }
+    if (amount > 100000) return { success: false, message: 'Maximum deposit is ₹1,00,000' }
+    if (!utr || utr.trim().length < 10) return { success: false, message: 'Invalid UTR number' }
+
+    const ref = doc(collection(db, 'deposits'))
+    await setDoc(ref, {
+      requestId: ref.id,
+      uid,
+      userName,
+      amount,
+      utr: utr.trim(),
+      upiId: upiId || null,
+      status: 'pending',
+      createdAt: serverTimestamp(),
+    })
+    return { success: true, requestId: ref.id }
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Failed' }
+  }
+}
+
+// ✅ Fixed: Added getUserDeposits export
+export function subscribeToUserDeposits(
+  uid: string,
+  callback: (deposits: DepositRequest[]) => void
+): () => void {
+  const q = query(
+    collection(db, 'deposits'),
+    where('uid', '==', uid),
+    orderBy('createdAt', 'desc'),
+    limit(20)
+  )
+  return onSnapshot(q, (snap) => {
+    callback(
+      snap.docs.map((d) => ({ ...d.data(), id: d.id } as DepositRequest))
+    )
+  })
+}
+
+// ✅ Added: getUserDeposits (async version)
+export async function getUserDeposits(uid: string): Promise<DepositRequest[]> {
+  try {
+    const q = query(
+      collection(db, 'deposits'),
+      where('uid', '==', uid),
+      orderBy('createdAt', 'desc'),
+      limit(20)
+    )
+    const snap = await getDocs(q)
+    return snap.docs.map((d) => ({ ...d.data(), id: d.id } as DepositRequest))
+  } catch {
+    return []
+  }
+}
+
+// ============================================================
+// WITHDRAWAL SERVICES
+// ============================================================
+
+export async function createWithdrawalRequest(
+  uid: string,
+  userName: string,
+  amount: number,
+  upiId: string
+): Promise<{ success: boolean; requestId?: string; message?: string }> {
+  try {
+    if (amount < 100) return { success: false, message: 'Minimum withdrawal is ₹100' }
+    if (amount > 50000) return { success: false, message: 'Maximum withdrawal is ₹50,000' }
+    if (!upiId || !upiId.includes('@')) return { success: false, message: 'Invalid UPI ID' }
+
+    const wallet = await getWallet(uid)
+    if (!wallet || wallet.balance < amount) {
+      return { success: false, message: 'Insufficient balance' }
     }
-  };
 
-  const tabs: { id: WalletTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'overview', label: 'Overview', icon: <Wallet size={16} /> },
-    { id: 'deposit', label: 'Add Money', icon: <Plus size={16} /> },
-    { id: 'withdraw', label: 'Withdraw', icon: <Minus size={16} /> },
-    { id: 'history', label: 'History', icon: <Clock size={16} /> },
-  ];
+    const ref = doc(collection(db, 'withdrawals'))
+    await setDoc(ref, {
+      requestId: ref.id,
+      uid,
+      userName,
+      amount,
+      upiId: upiId.trim(),
+      status: 'pending',
+      createdAt: serverTimestamp(),
+    })
+    return { success: true, requestId: ref.id }
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Failed' }
+  }
+}
 
-  return (
-    <MainLayout>
-      <div className="px-4 py-6 max-w-2xl mx-auto">
-        {/* Wallet Balance Card */}
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-yellow-600 via-orange-500 to-amber-600 p-6 mb-6 shadow-2xl"
-        >
-          <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-white/10 blur-2xl" />
-          <div className="absolute -bottom-8 -left-8 w-32 h-32 rounded-full bg-black/20 blur-2xl" />
-          <div className="relative">
-            <div className="flex items-center justify-between mb-1">
-              <p className="text-sm text-black/60 font-medium">Total Wallet Balance</p>
-              <Wallet size={20} className="text-black/40" />
-            </div>
-            <p className="text-4xl font-black text-black mb-4">₹{(userProfile?.walletBalance || 0).toFixed(2)}</p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-black/15 rounded-2xl p-3">
-                <p className="text-[10px] text-black/50 mb-0.5">Winnings</p>
-                <p className="text-lg font-black text-black">₹{(userProfile?.winningBalance || 0).toFixed(2)}</p>
-              </div>
-              <div className="bg-black/15 rounded-2xl p-3">
-                <p className="text-[10px] text-black/50 mb-0.5">Deposits</p>
-                <p className="text-lg font-black text-black">₹{(userProfile?.depositBalance || 0).toFixed(2)}</p>
-              </div>
-            </div>
-          </div>
-        </motion.div>
+// ✅ Fixed: Added getUserWithdrawals export
+export function subscribeToUserWithdrawals(
+  uid: string,
+  callback: (withdrawals: WithdrawalRequest[]) => void
+): () => void {
+  const q = query(
+    collection(db, 'withdrawals'),
+    where('uid', '==', uid),
+    orderBy('createdAt', 'desc'),
+    limit(20)
+  )
+  return onSnapshot(q, (snap) => {
+    callback(
+      snap.docs.map((d) => ({ ...d.data(), id: d.id } as WithdrawalRequest))
+    )
+  })
+}
 
-        {/* Quick Stats */}
-        <div className="grid grid-cols-3 gap-3 mb-6">
-          {[
-            { label: 'Total Deposited', value: userProfile?.totalDeposit || 0, icon: <ArrowDownLeft size={14} className="text-green-400" />, color: 'text-green-400' },
-            { label: 'Total Won', value: userProfile?.totalWin || 0, icon: <Trophy size={14} className="text-yellow-400" />, color: 'text-yellow-400' },
-            { label: 'Total Bet', value: userProfile?.totalBet || 0, icon: <Zap size={14} className="text-blue-400" />, color: 'text-blue-400' },
-          ].map((stat) => (
-            <div key={stat.label} className="glass rounded-2xl p-3 text-center">
-              <div className="flex justify-center mb-1">{stat.icon}</div>
-              <p className={`text-sm font-black ${stat.color}`}>₹{stat.value.toFixed(0)}</p>
-              <p className="text-[9px] text-gray-600 leading-tight">{stat.label}</p>
-            </div>
-          ))}
-        </div>
+// ✅ Added: getUserWithdrawals (async version)
+export async function getUserWithdrawals(uid: string): Promise<WithdrawalRequest[]> {
+  try {
+    const q = query(
+      collection(db, 'withdrawals'),
+      where('uid', '==', uid),
+      orderBy('createdAt', 'desc'),
+      limit(20)
+    )
+    const snap = await getDocs(q)
+    return snap.docs.map((d) => ({
+      ...d.data(),
+      id: d.id,
+    } as WithdrawalRequest))
+  } catch {
+    return []
+  }
+}
 
-        {/* Tabs */}
-        <div className="flex bg-white/5 rounded-2xl p-1 mb-6 gap-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                activeTab === tab.id ? 'bg-yellow-500 text-black shadow-lg' : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              {tab.icon}
-              <span className="hidden sm:block">{tab.label}</span>
-            </button>
-          ))}
-        </div>
+// ============================================================
+// NOTIFICATION SERVICES
+// ============================================================
 
-        <AnimatePresence mode="wait">
-          {/* Overview Tab */}
-          {activeTab === 'overview' && (
-            <motion.div key="overview" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-              <div className="flex gap-3 mb-6">
-                <Button variant="gold" fullWidth leftIcon={<Plus size={16} />} onClick={() => setActiveTab('deposit')}>Add Money</Button>
-                <Button variant="ghost" fullWidth leftIcon={<Minus size={16} />} onClick={() => setActiveTab('withdraw')}>Withdraw</Button>
-              </div>
+export async function createNotification(
+  uid: string,
+  type: string,
+  title: string,
+  message: string,
+  data?: Record<string, any>
+): Promise<void> {
+  const ref = doc(collection(db, 'notifications'))
+  await setDoc(ref, {
+    notifId: ref.id,
+    uid,
+    type,
+    title,
+    message,
+    data: data || null,
+    isRead: false,
+    createdAt: serverTimestamp(),
+  })
+}
 
-              {/* Recent transactions */}
-              <h3 className="text-sm font-semibold text-gray-300 mb-3">Recent Transactions</h3>
-              {transactions.length === 0 ? (
-                <div className="text-center py-12 text-gray-600">
-                  <Wallet size={32} className="mx-auto mb-3 opacity-30" />
-                  <p>No transactions yet</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {transactions.slice(0, 10).map((tx) => (
-                    <TransactionItem key={tx.id} tx={tx} />
-                  ))}
-                </div>
-              )}
-            </motion.div>
-          )}
+export function subscribeToNotifications(
+  uid: string,
+  callback: (notifications: Notification[]) => void
+): () => void {
+  const q = query(
+    collection(db, 'notifications'),
+    where('uid', '==', uid),
+    orderBy('createdAt', 'desc'),
+    limit(50)
+  )
+  return onSnapshot(q, (snap) => {
+    callback(
+      snap.docs.map((d) => ({
+        ...d.data(),
+        notifId: d.id,
+      } as Notification))
+    )
+  })
+}
 
-          {/* Deposit Tab */}
-          {activeTab === 'deposit' && (
-            <motion.div key="deposit" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
-              {/* UPI Info */}
-              <div className="glass-gold rounded-2xl p-5 mb-5">
-                <div className="flex items-center gap-2 mb-4">
-                  <QrCode size={20} className="text-yellow-400" />
-                  <h3 className="font-bold text-white">Pay via UPI</h3>
-                </div>
-                <div className="flex items-center gap-3 p-3 bg-black/30 rounded-xl mb-4">
-                  <div className="flex-1">
-                    <p className="text-xs text-gray-400 mb-0.5">UPI ID</p>
-                    <p className="font-mono font-bold text-yellow-400">{UPI_ID}</p>
-                  </div>
-                  <button onClick={copyUPI} className="p-2 rounded-lg hover:bg-white/10">
-                    {copied ? <CheckCircle size={18} className="text-green-400" /> : <Copy size={18} className="text-gray-400" />}
-                  </button>
-                </div>
-                <div className="aspect-square max-w-32 mx-auto bg-white rounded-xl p-2">
-                  <div className="w-full h-full bg-[url('https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=upi://pay?pa=gamezone@ybl')] bg-cover rounded-lg" />
-                </div>
-                <p className="text-xs text-gray-500 text-center mt-3">Scan QR or pay to UPI ID above</p>
-              </div>
+export async function markNotificationRead(notifId: string): Promise<void> {
+  await updateDoc(doc(db, 'notifications', notifId), {
+    isRead: true,
+    readAt: serverTimestamp(),
+  })
+}
 
-              {/* Quick amounts */}
-              <div className="grid grid-cols-4 gap-2 mb-5">
-                {QR_AMOUNT_AMOUNTS.map((amt) => (
-                  <button
-                    key={amt}
-                    onClick={() => setDepositAmount(String(amt))}
-                    className={`py-2 rounded-xl text-sm font-bold transition-all ${
-                      depositAmount === String(amt) ? 'bg-yellow-500 text-black' : 'bg-white/5 text-gray-400 hover:bg-white/10'
-                    }`}
-                  >
-                    ₹{amt}
-                  </button>
-                ))}
-              </div>
+export async function markAllNotificationsRead(uid: string): Promise<void> {
+  const q = query(
+    collection(db, 'notifications'),
+    where('uid', '==', uid),
+    where('isRead', '==', false)
+  )
+  const snap = await getDocs(q)
+  if (snap.empty) return
 
-              <form onSubmit={handleDeposit} className="space-y-4">
-                <Input label="Amount (₹)" type="number" placeholder="Min ₹100" value={depositAmount}
-                  onChange={(e) => setDepositAmount(e.target.value)} leftIcon={<span className="text-sm">₹</span>} />
-                <Input label="UTR / Transaction Number" placeholder="12-digit UTR number" value={utrNumber}
-                  onChange={(e) => setUtrNumber(e.target.value)} hint="Find UTR in your payment app after transfer" />
-                <Button type="submit" variant="gold" fullWidth size="lg" isLoading={isLoading}>
-                  Submit Deposit Request
-                </Button>
-              </form>
+  const batch = writeBatch(db)
+  snap.docs.forEach((d) => {
+    batch.update(d.ref, { isRead: true, readAt: serverTimestamp() })
+  })
+  await batch.commit()
+}
 
-              {/* Pending deposits */}
-              {deposits.filter(d => d.status === 'pending').length > 0 && (
-                <div className="mt-6">
-                  <h4 className="text-sm font-semibold text-gray-400 mb-3">Pending Deposits</h4>
-                  {deposits.filter(d => d.status === 'pending').map((dep) => (
-                    <div key={dep.requestId} className="flex items-center justify-between p-3 rounded-xl bg-yellow-500/10 border border-yellow-500/20 mb-2">
-                      <div>
-                        <p className="text-sm font-bold text-white">₹{dep.amount}</p>
-                        <p className="text-xs text-gray-500">UTR: {dep.utr}</p>
-                      </div>
-                      <Badge variant="gold">Pending</Badge>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </motion.div>
-          )}
+// ============================================================
+// ADMIN SERVICES
+// ============================================================
 
-          {/* Withdraw Tab */}
-          {activeTab === 'withdraw' && (
-            <motion.div key="withdraw" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
-              <div className="glass rounded-2xl p-4 mb-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs text-gray-500">Available to Withdraw</p>
-                    <p className="text-2xl font-black text-green-400">₹{(userProfile?.walletBalance || 0).toFixed(2)}</p>
-                  </div>
-                  <ArrowUpRight size={28} className="text-green-400" />
-                </div>
-              </div>
+export async function getAllUsers(limitCount = 50): Promise<UserProfile[]> {
+  try {
+    const q = query(
+      collection(db, 'users'),
+      orderBy('createdAt', 'desc'),
+      limit(limitCount)
+    )
+    const snap = await getDocs(q)
+    return snap.docs.map((d) => d.data() as UserProfile)
+  } catch {
+    return []
+  }
+}
 
-              <form onSubmit={handleWithdraw} className="space-y-4">
-                <Input label="Withdrawal Amount (₹)" type="number" placeholder="Min ₹100" value={withdrawAmount}
-                  onChange={(e) => setWithdrawAmount(e.target.value)} leftIcon={<span className="text-sm">₹</span>} />
-                <Input label="Your UPI ID" placeholder="yourname@bank" value={upiId}
-                  onChange={(e) => setUpiId(e.target.value)} hint="Ensure UPI ID is correct before submitting" />
-                <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20">
-                  <p className="text-xs text-blue-400">💡 Withdrawals are processed within 24 hours on business days</p>
-                </div>
-                <Button type="submit" variant="success" fullWidth size="lg" isLoading={isLoading}>
-                  Submit Withdrawal Request
-                </Button>
-              </form>
-            </motion.div>
-          )}
+export async function searchUsers(searchTerm: string): Promise<UserProfile[]> {
+  try {
+    const snap = await getDocs(collection(db, 'users'))
+    const term = searchTerm.toLowerCase()
+    return snap.docs
+      .map((d) => d.data() as UserProfile)
+      .filter(
+        (u) =>
+          u.name?.toLowerCase().includes(term) ||
+          u.email?.toLowerCase().includes(term) ||
+          u.username?.toLowerCase().includes(term) ||
+          u.mobile?.includes(term)
+      )
+      .slice(0, 20)
+  } catch {
+    return []
+  }
+}
 
-          {/* History Tab */}
-          {activeTab === 'history' && (
-            <motion.div key="history" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
-              <div className="space-y-2">
-                {transactions.map((tx) => <TransactionItem key={tx.id} tx={tx} />)}
-                {transactions.length === 0 && (
-                  <div className="text-center py-12 text-gray-600">
-                    <Clock size={32} className="mx-auto mb-3 opacity-30" />
-                    <p>No transactions found</p>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        <div className="h-6" />
-      </div>
-    </MainLayout>
-  );
-};
+export async function setUserStatus(
+  uid: string,
+  status: 'active' | 'banned' | 'suspended'
+): Promise<void> {
+  await updateDoc(doc(db, 'users', uid), {
+    status,
+    updatedAt: serverTimestamp(),
+  })
+}
 
-const TransactionItem = ({ tx }: { tx: Transaction }) => {
-  const isCredit = ['deposit', 'win', 'bonus', 'refund'].includes(tx.type);
-  const typeColors: Record<string, string> = {
-    deposit: 'text-green-400', win: 'text-yellow-400', bonus: 'text-purple-400',
-    withdrawal: 'text-red-400', bet: 'text-orange-400', refund: 'text-blue-400',
-  };
-  const typeIcons: Record<string, React.ReactNode> = {
-    deposit: <ArrowDownLeft size={14} />,
-    win: <Trophy size={14} />,
-    bonus: <Zap size={14} />,
-    withdrawal: <ArrowUpRight size={14} />,
-    bet: <Zap size={14} />,
-    refund: <ArrowDownLeft size={14} />,
-  };
+export async function setUserRole(
+  uid: string,
+  role: 'user' | 'admin' | 'moderator'
+): Promise<void> {
+  await updateDoc(doc(db, 'users', uid), {
+    role,
+    updatedAt: serverTimestamp(),
+  })
+}
 
-  return (
-    <div className="flex items-center gap-3 p-3 rounded-xl bg-[#16161f] border border-white/5">
-      <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${isCredit ? 'bg-green-500/15' : 'bg-red-500/15'}`}>
-        <span className={typeColors[tx.type]}>{typeIcons[tx.type]}</span>
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-white truncate">{tx.description || tx.type}</p>
-        <p className="text-xs text-gray-600">
-          {tx.createdAt ? format(new Date(tx.createdAt as string), 'MMM d, yyyy h:mm a') : 'Just now'}
-        </p>
-      </div>
-      <div className="text-right">
-        <p className={`text-sm font-bold ${isCredit ? 'text-green-400' : 'text-red-400'}`}>
-          {isCredit ? '+' : '-'}₹{(tx.amount || 0).toFixed(2)}
-        </p>
-        <p className="text-[10px] text-gray-600 capitalize">{tx.type}</p>
-      </div>
-    </div>
-  );
-};
+export async function resetUserWallet(uid: string): Promise<void> {
+  const batch = writeBatch(db)
+  batch.update(doc(db, 'wallets', uid), {
+    balance: 0,
+    winningBalance: 0,
+    depositBalance: 0,
+    bonusBalance: 0,
+    updatedAt: serverTimestamp(),
+  })
+  batch.update(doc(db, 'users', uid), {
+    walletBalance: 0,
+    winningBalance: 0,
+    depositBalance: 0,
+    updatedAt: serverTimestamp(),
+  })
+  await batch.commit()
+}
+
+export async function approveDeposit(
+  depositId: string,
+  adminUid: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    await runTransaction(db, async (transaction) => {
+      const depRef = doc(db, 'deposits', depositId)
+      const depSnap = await transaction.get(depRef)
+      if (!depSnap.exists()) throw new Error('Deposit not found')
+
+      const deposit = depSnap.data()
+      if (deposit.status !== 'pending') throw new Error('Already processed')
+
+      const walletRef = doc(db, 'wallets', deposit.uid)
+      const walletSnap = await transaction.get(walletRef)
+      if (!walletSnap.exists()) throw new Error('Wallet not found')
+
+      transaction.update(walletRef, {
+        balance: increment(deposit.amount),
+        updatedAt: serverTimestamp(),
+      })
+      transaction.update(depRef, {
+        status: 'approved',
+        processedBy: adminUid,
+        processedAt: serverTimestamp(),
+      })
+      transaction.update(doc(db, 'users', deposit.uid), {
+        totalDeposit: increment(deposit.amount),
+        updatedAt: serverTimestamp(),
+      })
+
+      const txRef = doc(collection(db, 'transactions'))
+      transaction.set(txRef, {
+        txId: txRef.id,
+        uid: deposit.uid,
+        type: 'deposit',
+        amount: deposit.amount,
+        description: `Deposit approved - UTR: ${deposit.utr}`,
+        referenceId: depositId,
+        status: 'completed',
+        createdAt: serverTimestamp(),
+      })
+
+      const notifRef = doc(collection(db, 'notifications'))
+      transaction.set(notifRef, {
+        notifId: notifRef.id,
+        uid: deposit.uid,
+        type: 'deposit_approved',
+        title: '✅ Deposit Approved!',
+        message: `Your deposit of ₹${deposit.amount.toLocaleString()} has been credited.`,
+        isRead: false,
+        createdAt: serverTimestamp(),
+      })
+    })
+    return { success: true, message: 'Approved successfully' }
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Failed' }
+  }
+}
+
+export async function rejectDeposit(
+  depositId: string,
+  adminUid: string,
+  reason?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    await runTransaction(db, async (transaction) => {
+      const depRef = doc(db, 'deposits', depositId)
+      const depSnap = await transaction.get(depRef)
+      if (!depSnap.exists()) throw new Error('Not found')
+
+      const deposit = depSnap.data()
+      if (deposit.status !== 'pending') throw new Error('Already processed')
+
+      transaction.update(depRef, {
+        status: 'rejected',
+        adminNote: reason || 'Rejected',
+        processedBy: adminUid,
+        processedAt: serverTimestamp(),
+      })
+
+      const notifRef = doc(collection(db, 'notifications'))
+      transaction.set(notifRef, {
+        notifId: notifRef.id,
+        uid: deposit.uid,
+        type: 'deposit_rejected',
+        title: '❌ Deposit Rejected',
+        message: `Your deposit of ₹${deposit.amount.toLocaleString()} was rejected. ${reason || ''}`,
+        isRead: false,
+        createdAt: serverTimestamp(),
+      })
+    })
+    return { success: true, message: 'Rejected' }
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Failed' }
+  }
+}
+
+export async function approveWithdrawal(
+  withdrawalId: string,
+  adminUid: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    await runTransaction(db, async (transaction) => {
+      const wRef = doc(db, 'withdrawals', withdrawalId)
+      const wSnap = await transaction.get(wRef)
+      if (!wSnap.exists()) throw new Error('Not found')
+
+      const w = wSnap.data()
+      if (w.status !== 'pending') throw new Error('Already processed')
+
+      const walletRef = doc(db, 'wallets', w.uid)
+      const walletSnap = await transaction.get(walletRef)
+      if (!walletSnap.exists()) throw new Error('Wallet not found')
+
+      const balance = walletSnap.data().balance || 0
+      if (balance < w.amount) throw new Error('Insufficient balance')
+
+      transaction.update(walletRef, {
+        balance: increment(-w.amount),
+        updatedAt: serverTimestamp(),
+      })
+      transaction.update(wRef, {
+        status: 'approved',
+        processedBy: adminUid,
+        processedAt: serverTimestamp(),
+      })
+      transaction.update(doc(db, 'users', w.uid), {
+        totalWithdraw: increment(w.amount),
+        updatedAt: serverTimestamp(),
+      })
+
+      const txRef = doc(collection(db, 'transactions'))
+      transaction.set(txRef, {
+        txId: txRef.id,
+        uid: w.uid,
+        type: 'withdrawal',
+        amount: w.amount,
+        description: `Withdrawal to ${w.upiId}`,
+        referenceId: withdrawalId,
+        status: 'completed',
+        createdAt: serverTimestamp(),
+      })
+
+      const notifRef = doc(collection(db, 'notifications'))
+      transaction.set(notifRef, {
+        notifId: notifRef.id,
+        uid: w.uid,
+        type: 'withdrawal_approved',
+        title: '💸 Withdrawal Approved!',
+        message: `₹${w.amount.toLocaleString()} sent to ${w.upiId}`,
+        isRead: false,
+        createdAt: serverTimestamp(),
+      })
+    })
+    return { success: true, message: 'Approved' }
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Failed' }
+  }
+}
+
+export async function rejectWithdrawal(
+  withdrawalId: string,
+  adminUid: string,
+  reason?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    await runTransaction(db, async (transaction) => {
+      const wRef = doc(db, 'withdrawals', withdrawalId)
+      const wSnap = await transaction.get(wRef)
+      if (!wSnap.exists()) throw new Error('Not found')
+
+      const w = wSnap.data()
+      if (w.status !== 'pending') throw new Error('Already processed')
+
+      transaction.update(wRef, {
+        status: 'rejected',
+        adminNote: reason || 'Rejected',
+        processedBy: adminUid,
+        processedAt: serverTimestamp(),
+      })
+
+      const notifRef = doc(collection(db, 'notifications'))
+      transaction.set(notifRef, {
+        notifId: notifRef.id,
+        uid: w.uid,
+        type: 'withdrawal_rejected',
+        title: '🚫 Withdrawal Rejected',
+        message: `₹${w.amount.toLocaleString()} withdrawal rejected. ${reason || ''}`,
+        isRead: false,
+        createdAt: serverTimestamp(),
+      })
+    })
+    return { success: true, message: 'Rejected' }
+  } catch (error: any) {
+    return { success: false, message: error.message || 'Failed' }
+  }
+}
+
+export function subscribeToPendingDeposits(
+  callback: (deposits: DepositRequest[]) => void
+): () => void {
+  const q = query(
+    collection(db, 'deposits'),
+    where('status', '==', 'pending'),
+    orderBy('createdAt', 'desc')
+  )
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map((d) => ({ ...d.data(), id: d.id } as DepositRequest)))
+  })
+}
+
+export function subscribeToPendingWithdrawals(
+  callback: (withdrawals: WithdrawalRequest[]) => void
+): () => void {
+  const q = query(
+    collection(db, 'withdrawals'),
+    where('status', '==', 'pending'),
+    orderBy('createdAt', 'desc')
+  )
+  return onSnapshot(q, (snap) => {
+    callback(
+      snap.docs.map((d) => ({ ...d.data(), id: d.id } as WithdrawalRequest))
+    )
+  })
+}
+
+export async function sendBroadcastNotification(
+  title: string,
+  message: string,
+  adminUid: string
+): Promise<void> {
+  const usersSnap = await getDocs(
+    query(collection(db, 'users'), where('status', '==', 'active'))
+  )
+  const batch = writeBatch(db)
+  usersSnap.docs.forEach((userDoc) => {
+    const notifRef = doc(collection(db, 'notifications'))
+    batch.set(notifRef, {
+      notifId: notifRef.id,
+      uid: userDoc.id,
+      type: 'admin_announcement',
+      title,
+      message,
+      isRead: false,
+      sentBy: adminUid,
+      createdAt: serverTimestamp(),
+    })
+  })
+  await batch.commit()
+}
+
+export async function getPlatformStats(): Promise<{
+  totalUsers: number
+  totalDeposits: number
+  totalWithdrawals: number
+  pendingDeposits: number
+  pendingWithdrawals: number
+  totalRevenue: number
+}> {
+  try {
+    const [usersSnap, approvedDeps, approvedWiths, pendingDeps, pendingWiths] =
+      await Promise.all([
+        getDocs(collection(db, 'users')),
+        getDocs(query(collection(db, 'deposits'), where('status', '==', 'approved'))),
+        getDocs(query(collection(db, 'withdrawals'), where('status', '==', 'approved'))),
+        getDocs(query(collection(db, 'deposits'), where('status', '==', 'pending'))),
+        getDocs(query(collection(db, 'withdrawals'), where('status', '==', 'pending'))),
+      ])
+
+    let totalDeposits = 0
+    approvedDeps.docs.forEach((d) => { totalDeposits += d.data().amount || 0 })
+
+    let totalWithdrawals = 0
+    approvedWiths.docs.forEach((d) => { totalWithdrawals += d.data().amount || 0 })
+
+    return {
+      totalUsers: usersSnap.size,
+      totalDeposits,
+      totalWithdrawals,
+      pendingDeposits: pendingDeps.size,
+      pendingWithdrawals: pendingWiths.size,
+      totalRevenue: totalDeposits - totalWithdrawals,
+    }
+  } catch {
+    return {
+      totalUsers: 0,
+      totalDeposits: 0,
+      totalWithdrawals: 0,
+      pendingDeposits: 0,
+      pendingWithdrawals: 0,
+      totalRevenue: 0,
+    }
+  }
+}
