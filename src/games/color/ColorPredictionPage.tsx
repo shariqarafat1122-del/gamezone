@@ -1,5 +1,4 @@
 
-ColorPredictionPage.tsx
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowLeft, Trophy, Clock, Users, Zap, History } from 'lucide-react';
